@@ -83,7 +83,7 @@ class My_NN(nn.Module):
 
 
 image_size = max_width
-classifier = My_NN(in_feature=image_size, hidden_layers=[16,8], out_features=102, activation_function=F.relu)
+classifier = My_NN(in_feature=image_size, hidden_layers=[16, 8], out_features=102, activation_function=F.relu)
 
 resized_training_images = torch.stack(resized_training_images)
 resized_testing_images = torch.stack(resized_testing_images)
