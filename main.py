@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 import torch
 
-training_data1 = datasets.Flower102(
+training_data1 = datasets.Flowers102(
     root="data",
     split="train",
     download=True,
