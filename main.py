@@ -1,111 +1,139 @@
-from torchvision import datasets
-from torch.utils.data import Subset
-from torchvision.transforms import ToTensor
+import torch
+import torchvision.transforms as transforms
+from torchvision.datasets import Flowers102
+from torch.utils.data import DataLoader
+import numpy as np
+import torch.optim as optim
 import torch.nn.functional as F
 import torch.nn as nn
-import torch
 
-training_data1 = datasets.Flowers102(
-    root="data",
-    split="train",
-    download=True,
-    transform=ToTensor()
+# Define transforms for data augmentation and normalization
+train_transform = transforms.Compose([
+    transforms.RandomResizedCrop(128),
+    transforms.RandomHorizontalFlip(),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
 
-)
+val_transform = transforms.Compose([
+    transforms.Resize(144),
+    transforms.CenterCrop(128),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
 
-validation_data1 = datasets.Flowers102(
-    root="data",
-    split="train",
-    download=True,
-    transform=ToTensor()
-)
+# Load the dataset with train/val/test splits
+train_dataset = Flowers102(root='./data', split='train', transform=train_transform, download=True)
+val_dataset = Flowers102(root='./data', split='test', transform=val_transform, download=True)
 
-training_data = Subset(training_data1, range(200))
-validation_data = Subset(validation_data1, range(200))
+# Set random seed for reproducibility
+torch.manual_seed(42)
+np.random.seed(42)
 
-training_images = [image for image, label in training_data]
-training_labels = [label for image, label in training_data]
+# Define data loaders
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
 
-test_images = [image for image, label in validation_data]
-test_labels = [label for image, label in validation_data]
+class CNN_NN(nn.Module):
+    def __init__(self, num_classes=102):
+        super(CNN_NN, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=1)
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
+        self.conv3 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride=1, padding=1)
 
-max_width = 0
-max_height = 0
-for i in range(0, 100, 1):
-    if training_images[i].shape[1] > max_width:
-        max_width = training_images[i].shape[1]
-    if training_images[i].shape[2] > max_height:
-        max_height = training_images[i].shape[2]
-    if test_images[i].shape[1] > max_width:
-        max_width = test_images[i].shape[1]
-    if test_images[i].shape[2] > max_height:
-        max_height = test_images[i].shape[2]
+        # Calculate the size after convolutions and pooling
+        self._to_linear = None
+        self.convs = nn.Sequential(
+            self.conv1,
+            nn.ReLU(),
+            self.pool,
+            self.conv2,
+            nn.ReLU(),
+            self.pool,
+            self.conv3,
+            nn.ReLU(),
+            self.pool
+        )
+        x = torch.randn(32, 3, 128, 128)  # Sample input with batch size 1
+        self._to_linear = self.convs(x).view(1, -1).shape[1]
 
-resized_training_images = []
-for image in training_images:
-    resized_image = F.interpolate(image.unsqueeze(0), size=(max_height, max_width), mode='bilinear',
-                                  align_corners=False)
-    resized_training_images.append(resized_image.squeeze(0))
-
-resized_training_images = tuple(resized_training_images)
-
-resized_testing_images = []
-for image in test_images:
-    resized_image = F.interpolate(image.unsqueeze(0), size=(max_height, max_width), mode='bilinear',
-                                  align_corners=False)
-    resized_testing_images.append(resized_image.squeeze(0))
-
-resized_testing_images = tuple(resized_testing_images)
-
-
-class My_NN(nn.Module):
-    def __init__(self, in_feature, hidden_layers, out_features, activation_function):
-        super().__init__()
-        if len(hidden_layers) < 1:
-            raise Exception("My_NN must at least have 1 hidden layer")
-        self.layers = []
-        self.layers.append(nn.Linear(in_feature, hidden_layers[0]))
-        self.add_module("input_layer", self.layers[0])
-
-        for i in range(1, len(hidden_layers)):
-            self.layers.append(nn.Linear(hidden_layers[i - 1], hidden_layers[i]))
-            self.add_module(f"hidden_layer_{i}", self.layers[i])
-
-        self.out = nn.Linear(hidden_layers[-1], out_features)
-
-        self.activation_function = activation_function
+        self.fc1 = nn.Linear(self._to_linear, 512)
+        self.fc2 = nn.Linear(512, num_classes)
+        self.dropout = nn.Dropout(0.5)
 
     def forward(self, x):
-        for i in range(len(self.layers)):
-            x = self.activation_function(self.layers[i](x))
-        x = self.out(x)
+        x = self.convs(x)
+        x = x.view(x.size(0), -1)  # Flatten the tensor while preserving the batch size
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
         return x
 
+# Define the device (GPU or CPU)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-image_size = max_width
-classifier = My_NN(in_feature=image_size, hidden_layers=[16, 8], out_features=102, activation_function=F.relu)
+# Hyperparameters
+num_classes = 102  # Number of output classes
+learning_rate = 0.001
+num_epochs = 25
 
-resized_training_images = torch.stack(resized_training_images)
-resized_testing_images = torch.stack(resized_testing_images)
+# Initialize the model
+model = CNN_NN(num_classes=num_classes).to(device)
 
-training_labels = torch.LongTensor(training_labels).unsqueeze(1)
-test_labels = torch.LongTensor(test_labels).unsqueeze(1)
-training_labels = torch.LongTensor(training_labels).unsqueeze(1)
-test_labels = torch.LongTensor(test_labels).unsqueeze(1)
+# Loss function
+criterion = nn.CrossEntropyLoss()
 
-lossFn = nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(classifier.parameters(), lr=0.01)
-epochs = 100
+# Optimizer
+optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-losses = []
-for i in range(epochs):
-    y_pred = classifier.forward(resized_training_images)
+# Training loop
+for epoch in range(num_epochs):
+    model.train()  # Set the model to training mode
+    running_loss = 0.0
+    for images, labels in train_loader:
+        images = images.to(device)
+        labels = labels.to(device)
 
-    loss = lossFn(y_pred, training_labels.unsqueeze(1))
+        # Forward pass
+        outputs = model(images)
+        loss = criterion(outputs, labels)
 
-    if i % 10 == 0:
-        print(f"Epoch {i} - {loss}")
+        # Backward pass and optimization
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+        running_loss += loss.item() * images.size(0)
+
+    # Calculate average loss for the epoch
+    epoch_loss = running_loss / len(train_loader.dataset)
+
+    # Validation
+    model.eval()  # Set the model to evaluation mode
+    val_loss = 0.0
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for images, labels in val_loader:
+            images = images.to(device)
+            labels = labels.to(device)
+
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            val_loss += loss.item() * images.size(0)
+
+            _, predicted = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+    # Calculate average validation loss and accuracy
+    val_loss = val_loss / len(val_loader.dataset)
+    accuracy = correct / total
+
+    print(f'Epoch [{epoch+1}/{num_epochs}], '
+          f'Training Loss: {epoch_loss:.4f}, '
+          f'Validation Loss: {val_loss:.4f}, '
+          f'Validation Accuracy: {accuracy:.4f}')
+
+print('Finished Training')
